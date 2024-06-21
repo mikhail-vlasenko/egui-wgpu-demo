@@ -15,7 +15,9 @@ use egui_winit::winit::{
     keyboard::{Key, NamedKey},
     window::{Window, WindowBuilder},
 };
+use egui::{Align2, Context};
 use egui_winit::winit;
+use wgpu::{CommandEncoder, Device, Queue, SurfaceConfiguration, TextureView};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -78,6 +80,7 @@ struct State<'a> {
     num_indices: u32,
     window: &'a Window,
     egui: EguiRenderer,
+    egui_manager: EguiManager
 }
 
 impl<'a> State<'a> {
@@ -90,7 +93,7 @@ impl<'a> State<'a> {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
-        
+
         let surface = instance.create_surface(window).unwrap();
 
         let adapter = instance
@@ -210,7 +213,6 @@ impl<'a> State<'a> {
         });
         let num_indices = INDICES.len() as u32;
 
-        // ...
         let mut egui = EguiRenderer::new(
             &device,       // wgpu Device
             config.format, // TextureFormat
@@ -218,6 +220,8 @@ impl<'a> State<'a> {
             1,             // samples
             window,       // winit Window
         );
+
+        let egui_manager = EguiManager::new();
 
         Self {
             surface,
@@ -231,6 +235,7 @@ impl<'a> State<'a> {
             num_indices,
             window,
             egui,
+            egui_manager,
         }
     }
 
@@ -301,25 +306,85 @@ impl<'a> State<'a> {
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
-        let screen_descriptor = ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
-            pixels_per_point: self.window().scale_factor() as f32,
-        };
-
-        self.egui.draw(
+        self.egui_manager.render_ui(
+            &mut self.egui,
+            &self.config,
             &self.device,
             &self.queue,
             &mut encoder,
-            &self.window,
             &view,
-            screen_descriptor,
-            |ui| GUI(ui),
+            &self.window,
         );
 
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
 
         Ok(())
+    }
+}
+
+
+struct EguiManager {
+    q: u32,
+}
+
+impl EguiManager {
+    pub fn new() -> Self {
+        EguiManager {
+            q: 0,
+        }
+    }
+
+    pub fn render_ui(
+        &mut self,
+        egui_renderer: &mut EguiRenderer,
+        config: &SurfaceConfiguration,
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        view: &TextureView,
+        window: &Window,
+    ){
+        let screen_descriptor = ScreenDescriptor {
+            size_in_pixels: [config.width, config.height],
+            pixels_per_point: window.scale_factor() as f32,
+        };
+        egui_renderer.draw(
+            device,
+            queue,
+            encoder,
+            window,
+            view,
+            screen_descriptor,
+            |context| {
+                GUI(context);
+                self.GUI2(context);
+            }
+        );
+    }
+
+    pub fn GUI2(&mut self, context: &Context) {
+        egui::Window::new("Streamline CFD2")
+            // .vscroll(true)
+            .default_open(true)
+            .max_width(1000.0)
+            .max_height(800.0)
+            .default_width(800.0)
+            .resizable(true)
+            .anchor(Align2::RIGHT_BOTTOM, [0.0, 0.0])
+            .show(&context, |ui| {
+                if ui.add(egui::Button::new("Click me2")).clicked() {
+                    println!("PRESSED");
+                    self.q += 1;
+                    println!("q: {}", self.q);
+                }
+
+                ui.label("Slider");
+                // ui.add(egui::Slider::new(_, 0..=120).text("age"));
+                ui.end_row();
+
+                // proto_scene.egui(ui);
+            });
     }
 }
 
@@ -393,7 +458,6 @@ pub async fn run() {
                             Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
                         }
                     }
-
                     _ => {}
                 };
                 state.egui.handle_input(&mut state.window, &event);
